@@ -716,10 +716,7 @@
     };
     const url = `https://www.doubao.com/chat/url-action?action=${encodeURIComponent(JSON.stringify(action))}`;
     navigator.clipboard?.writeText(prompt).catch(() => {});
-    const opened = window.open(url, "_blank", "noopener,noreferrer");
-    if (!opened) {
-      alert("浏览器阻止了弹窗，题目信息已尝试复制。请打开豆包后粘贴提问。");
-    }
+    window.location.assign(url);
   }
 
   function submitAnswer() {
