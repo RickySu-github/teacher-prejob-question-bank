@@ -364,7 +364,7 @@
       </div>
       <div class="kpis">
         <div class="kpi"><b id="kpiToday">0/100</b><span>今日进度</span></div>
-        <div class="kpi"><b id="kpiLearned">0%</b><span>已学会</span></div>
+        <div class="kpi"><b id="kpiLearned">0%</b><span>已掌握</span></div>
         <div class="kpi"><b id="kpiWrong">0</b><span>错题数</span></div>
         <div class="kpi"><b id="kpiDays">-</b><span>距考试</span></div>
       </div>
@@ -395,7 +395,7 @@
         </label>
         <label>显示范围
           <select id="learnedFilter">
-            <option value="hide">隐藏已学会</option>
+            <option value="hide">隐藏已做对/已学会</option>
             <option value="show">显示全部</option>
           </select>
         </label>
@@ -409,7 +409,7 @@
       <div class="plan-box">
         <div class="plan-text">
           <span id="queueText">待开始</span>
-          <span id="targetText">每日按科目比例抽 100 题，优先错题和无规则题</span>
+          <span id="targetText">每日按科目比例抽 100 题，答对后不再重复出现</span>
         </div>
         <div class="bar"><i id="todayBar"></i></div>
       </div>
@@ -420,7 +420,7 @@
     </section>
 
     <section class="subject-progress">
-      <h2>各科 80% 目标进度</h2>
+      <h2>各科 80% 掌握目标进度</h2>
       <div id="subjectList" class="subject-list"></div>
     </section>
   </main>
@@ -477,6 +477,14 @@
 
   function learned(id) {
     return !!state.learned[id];
+  }
+
+  function answeredCorrect(id) {
+    return (state.attempts[id]?.correct || 0) > 0;
+  }
+
+  function mastered(id) {
+    return learned(id) || answeredCorrect(id);
   }
 
   function attempt(id) {
@@ -536,7 +544,7 @@
     for (const subject of SUBJECTS) {
       const quota = DAILY_QUOTAS[subject] || 0;
       const candidates = QUESTIONS
-        .filter((q) => q.subject === subject && !learned(q.id))
+        .filter((q) => q.subject === subject && !mastered(q.id))
         .sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
       for (const q of candidates.slice(0, quota)) {
         selected.push(q.id);
@@ -545,7 +553,7 @@
     }
     if (selected.length < 100) {
       const fill = QUESTIONS
-        .filter((q) => !used.has(q.id) && !learned(q.id))
+        .filter((q) => !used.has(q.id) && !mastered(q.id))
         .sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
       for (const q of fill.slice(0, 100 - selected.length)) selected.push(q.id);
     }
@@ -574,10 +582,10 @@
     if (mode === "norule") list = QUESTIONS.filter((q) => q.rule === "none");
     if (mode === "strict") list = QUESTIONS.filter((q) => q.rule === "strict" || q.rule === "exception");
     if (mode === "subject" && subject !== "all") list = QUESTIONS.filter((q) => q.subject === subject);
-    if (mode === "unlearned") list = QUESTIONS.filter((q) => !learned(q.id));
+    if (mode === "unlearned") list = QUESTIONS.filter((q) => !mastered(q.id));
     if (mode !== "subject" && subject !== "all") list = list.filter((q) => q.subject === subject);
     if (type !== "all") list = list.filter((q) => q.type === type);
-    if (learnedMode === "hide") list = list.filter((q) => !learned(q.id));
+    if (learnedMode === "hide") list = list.filter((q) => !mastered(q.id));
     if (mode !== "daily") {
       const date = todayKey();
       list = [...list].sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
@@ -592,11 +600,26 @@
   }
 
   function nextQuestion() {
-    if (!activeIds.length) {
-      startTraining();
-      return;
+    const currentId = current?.id;
+    if ($("learnedFilter").value === "hide") {
+      const previousIndex = activeIndex;
+      activeIds = activeIds.filter((id) => !mastered(id));
+      if (!activeIds.length) {
+        activeIndex = 0;
+        renderCurrent();
+        return;
+      }
+      const currentPos = currentId ? activeIds.indexOf(currentId) : -1;
+      activeIndex = currentPos >= 0
+        ? (currentPos + 1) % activeIds.length
+        : previousIndex % activeIds.length;
+    } else {
+      if (!activeIds.length) {
+        startTraining();
+        return;
+      }
+      activeIndex = (activeIndex + 1) % activeIds.length;
     }
-    activeIndex = (activeIndex + 1) % activeIds.length;
     renderCurrent();
   }
 
@@ -627,7 +650,7 @@
         <span class="tag">${TYPE_LABEL[current.type] || current.type}</span>
         <span class="tag ${ruleClass}">${RULE_LABEL[current.rule] || "辅助"}</span>
         ${at.wrong ? `<span class="tag wrong">错 ${at.wrong}</span>` : ""}
-        ${learned(current.id) ? '<span class="tag strict">已学会</span>' : ""}
+        ${learned(current.id) ? '<span class="tag strict">已学会</span>' : answeredCorrect(current.id) ? '<span class="tag strict">已做对</span>' : ""}
       </div>
       <p class="stem">${highlightText(current.stem, stemTerms)}</p>
       <p class="anchor-line">题干锚点：${escapeHtml(current.anchor || "无")}</p>
@@ -665,8 +688,10 @@
     }
     const ok = sameSet(chosen, correctKeys(current));
     const at = attempt(current.id);
-    if (ok) at.correct += 1;
-    else at.wrong += 1;
+    if (ok) {
+      at.correct += 1;
+      state.learned[current.id] = true;
+    } else at.wrong += 1;
     at.last = todayKey();
     state.today.done[current.id] = true;
     saveState();
@@ -704,7 +729,7 @@
 
   function updateStats() {
     const total = QUESTIONS.length;
-    const learnedCount = Object.keys(state.learned).length;
+    const learnedCount = QUESTIONS.filter((q) => mastered(q.id)).length;
     const wrongCount = Object.values(state.attempts).filter((x) => (x.wrong || 0) > 0).length;
     const todayDone = state.today?.date === todayKey() ? Object.keys(state.today.done || {}).length : 0;
     const days = Math.max(0, Math.ceil((new Date(EXAM_DATE + "T00:00:00") - new Date()) / 86400000));
@@ -715,7 +740,7 @@
     $("todayBar").style.width = `${Math.min(100, todayDone)}%`;
     $("queueText").textContent = activeIds.length
       ? `当前队列 ${activeIndex + 1}/${activeIds.length}`
-      : `共 ${total} 题，已学会 ${((learnedCount / total) * 100).toFixed(1)}%`;
+      : `共 ${total} 题，已掌握 ${((learnedCount / total) * 100).toFixed(1)}%`;
     renderSubjectProgress();
   }
 
@@ -725,7 +750,7 @@
       if (!grouped.has(q.subject)) grouped.set(q.subject, { total: 0, learned: 0, wrong: 0 });
       const g = grouped.get(q.subject);
       g.total += 1;
-      if (learned(q.id)) g.learned += 1;
+      if (mastered(q.id)) g.learned += 1;
       if ((state.attempts[q.id]?.wrong || 0) > 0) g.wrong += 1;
     }
     $("subjectList").innerHTML = SUBJECTS.map((subject) => {
