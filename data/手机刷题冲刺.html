@@ -685,38 +685,72 @@
   function buildAiPrompt() {
     const chosen = selectedKeys();
     const optionLines = current.options
-      .map((opt) => `${opt.key}. ${opt.text}`)
-      .join("\n");
+      .map((opt) => `${opt.key}.${opt.text}`)
+      .join("；");
     const chosenText = chosen.length ? chosen.join("、") : "尚未选择";
     return [
-      "请作为教师岗前培训考试辅导老师，帮我解答这道题。",
-      "要求：先判断答案是否合理，再用简洁中文解释考点、易错点和记忆方法；如果题目或答案可能有争议，请指出争议点。",
-      "",
+      "请作为教师岗前培训考试辅导老师解答这道题：先判断标准答案是否合理，再简洁说明考点、易错点和记忆方法；若题目或答案有争议，请指出。",
       `题号：${current.id}`,
       `科目：${current.subject}`,
       `题型：${TYPE_LABEL[current.type] || current.type}`,
       `题干：${current.stem}`,
-      "",
-      "选项：",
-      optionLines,
-      "",
+      `选项：${optionLines}`,
       `我当前选择：${chosenText}`,
       `标准答案：${current.answer}`,
       `题干锚点：${current.anchor || "无"}`,
       `本页速记解析：${current.explain}`
-    ].join("\n");
+    ].join("。");
+  }
+
+  function buildDoubaoUrl(prompt) {
+    const now = Date.now();
+    const action = {
+      pluginId: "Send_Message",
+      payload: {
+        text: prompt,
+        reportParams: {
+          content_source: "paste",
+          content_source_template_id: "",
+          send_source: "guidance_page",
+          scene: "keyboard",
+          is_long_file: 0,
+          new_guidance: "1",
+          is_from_screen_shot: 0,
+          is_from_new_tab: 1
+        },
+        conversationId: `local_${now}${Math.floor(Math.random() * 1000)}`,
+        extraExt: {
+          input_skill: "{\"skill_type\":20}",
+          use_deep_think: "0"
+        },
+        loginSource: "new_tab",
+        startJumpTime: now
+      },
+      pfTrackParams: {
+        startJumpTime: now,
+        phase1EventName: "pc_new_tab_chat_open_jump_phase1_duration",
+        phase2EventName: "pc_new_tab_chat_open_jump_phase2_duration",
+        phase3EventName: "pc_new_tab_chat_open_jump_phase3_duration",
+        phaseNavEventName: "pc_new_tab_chat_open_jump_phasenav_duration",
+        phaseChatRenderEventName: "pc_new_tab_chat_open_jump_chatrender_duration"
+      },
+      options: {
+        deepThinkingActiveType: "0",
+        superTaskStatus: {
+          switchValue: 0,
+          taskMode: 0,
+          safeToken: ""
+        }
+      }
+    };
+    return `https://www.doubao.com/chat/url-action?action=${encodeURIComponent(JSON.stringify(action))}&prev_page=new_tab`;
   }
 
   function askAi() {
     if (!current) return;
     const prompt = buildAiPrompt();
-    const action = {
-      pluginId: "Send_Message",
-      payload: { text: prompt }
-    };
-    const url = `https://www.doubao.com/chat/url-action?action=${encodeURIComponent(JSON.stringify(action))}`;
     navigator.clipboard?.writeText(prompt).catch(() => {});
-    window.location.assign(url);
+    window.location.assign(buildDoubaoUrl(prompt));
   }
 
   function submitAnswer() {
