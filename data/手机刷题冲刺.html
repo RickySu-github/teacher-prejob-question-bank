@@ -253,7 +253,7 @@
     }
     .judge-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 8px;
       margin-bottom: 8px;
     }
@@ -349,6 +349,7 @@
       .controls { grid-template-columns: 1fr; }
       .control-actions { grid-template-columns: 1fr 1fr; }
       .control-actions button.primary { grid-column: 1 / -1; }
+      .judge-row { grid-template-columns: 1fr; }
       .stem { font-size: 17px; }
       .subject-row { grid-template-columns: 1fr 64px; }
       .subject-row .mini { grid-column: 1 / -1; }
@@ -665,6 +666,7 @@
       <div class="judge-row">
         <button id="submitBtn" class="primary">提交判分</button>
         <button id="showBtn">直接看答案</button>
+        <button id="askAiBtn">询问AI</button>
       </div>
       <div id="resultBox" class="result"></div>
       <div class="bottom-actions">
@@ -674,9 +676,50 @@
     `;
     $("submitBtn").onclick = submitAnswer;
     $("showBtn").onclick = () => revealAnswer(null);
+    $("askAiBtn").onclick = askAi;
     $("learnedBtn").onclick = toggleLearned;
     $("nextBtn").onclick = nextQuestion;
     updateStats();
+  }
+
+  function buildAiPrompt() {
+    const chosen = selectedKeys();
+    const optionLines = current.options
+      .map((opt) => `${opt.key}. ${opt.text}`)
+      .join("\n");
+    const chosenText = chosen.length ? chosen.join("、") : "尚未选择";
+    return [
+      "请作为教师岗前培训考试辅导老师，帮我解答这道题。",
+      "要求：先判断答案是否合理，再用简洁中文解释考点、易错点和记忆方法；如果题目或答案可能有争议，请指出争议点。",
+      "",
+      `题号：${current.id}`,
+      `科目：${current.subject}`,
+      `题型：${TYPE_LABEL[current.type] || current.type}`,
+      `题干：${current.stem}`,
+      "",
+      "选项：",
+      optionLines,
+      "",
+      `我当前选择：${chosenText}`,
+      `标准答案：${current.answer}`,
+      `题干锚点：${current.anchor || "无"}`,
+      `本页速记解析：${current.explain}`
+    ].join("\n");
+  }
+
+  function askAi() {
+    if (!current) return;
+    const prompt = buildAiPrompt();
+    const action = {
+      pluginId: "Send_Message",
+      payload: { text: prompt }
+    };
+    const url = `https://www.doubao.com/chat/url-action?action=${encodeURIComponent(JSON.stringify(action))}`;
+    navigator.clipboard?.writeText(prompt).catch(() => {});
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      alert("浏览器阻止了弹窗，题目信息已尝试复制。请打开豆包后粘贴提问。");
+    }
   }
 
   function submitAnswer() {
