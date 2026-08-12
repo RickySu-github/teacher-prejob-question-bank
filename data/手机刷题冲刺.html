@@ -527,12 +527,17 @@
       if (resolved && value) todayDone[resolved] = true;
     }
 
+    const completedAfterMigration = (id) => {
+      const a = attemptsNext[id];
+      return !!learnedNext[id] || !!a && ((Number(a.correct) || 0) + (Number(a.wrong) || 0)) > 0;
+    };
+
     state = {
       learned: learnedNext,
       attempts: attemptsNext,
       today: {
         date: todayPrev.date || "",
-        ids: todayIds,
+        ids: todayIds.filter((id) => !todayDone[id] && !completedAfterMigration(id)),
         done: todayDone
       }
     };
@@ -573,6 +578,15 @@
 
   function learned(id) {
     return !!state.learned[id];
+  }
+
+  function hasAttempted(id) {
+    const a = state.attempts[id];
+    return !!a && ((Number(a.correct) || 0) + (Number(a.wrong) || 0)) > 0;
+  }
+
+  function completed(id) {
+    return learned(id) || hasAttempted(id);
   }
 
   function attempt(id) {
@@ -632,7 +646,7 @@
     for (const subject of SUBJECTS) {
       const quota = DAILY_QUOTAS[subject] || 0;
       const candidates = QUESTIONS
-        .filter((q) => q.subject === subject && !learned(q.id))
+        .filter((q) => q.subject === subject && !completed(q.id))
         .sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
       for (const q of candidates.slice(0, quota)) {
         selected.push(q.id);
@@ -641,7 +655,7 @@
     }
     if (selected.length < 100) {
       const fill = QUESTIONS
-        .filter((q) => !used.has(q.id) && !learned(q.id))
+        .filter((q) => !used.has(q.id) && !completed(q.id))
         .sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
       for (const q of fill.slice(0, 100 - selected.length)) selected.push(q.id);
     }
@@ -670,15 +684,36 @@
     if (mode === "norule") list = QUESTIONS.filter((q) => q.rule === "none");
     if (mode === "strict") list = QUESTIONS.filter((q) => q.rule === "strict" || q.rule === "exception");
     if (mode === "subject" && subject !== "all") list = QUESTIONS.filter((q) => q.subject === subject);
-    if (mode === "unlearned") list = QUESTIONS.filter((q) => !learned(q.id));
+    if (mode === "unlearned") list = QUESTIONS.filter((q) => !completed(q.id));
     if (mode !== "subject" && subject !== "all") list = list.filter((q) => q.subject === subject);
     if (type !== "all") list = list.filter((q) => q.type === type);
-    if (learnedMode === "hide") list = list.filter((q) => !learned(q.id));
+    if (learnedMode === "hide") {
+      if (mode === "wrong") {
+        list = list.filter((q) => !learned(q.id));
+      } else {
+        list = list.filter((q) => !completed(q.id) && !(mode === "daily" && state.today?.done?.[q.id]));
+      }
+    }
     if (mode !== "daily") {
       const date = todayKey();
       list = [...list].sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
     }
     return list.map((q) => q.id);
+  }
+
+  function keepInActiveQueue(id) {
+    if (!questionById(id)) return false;
+    const mode = $("modeSelect")?.value || "daily";
+    const learnedMode = $("learnedFilter")?.value || "hide";
+    if (learnedMode !== "hide") return true;
+    if (mode === "wrong") return (state.attempts[id]?.wrong || 0) > 0 && !learned(id);
+    if (mode === "daily" && state.today?.done?.[id]) return false;
+    return !completed(id);
+  }
+
+  function pruneActiveQueue() {
+    activeIds = activeIds.filter(keepInActiveQueue);
+    if (activeIndex >= activeIds.length) activeIndex = 0;
   }
 
   function startTraining() {
@@ -688,11 +723,17 @@
   }
 
   function nextQuestion() {
+    const beforeId = current && current.id;
+    const beforeHadCurrent = beforeId && activeIds.includes(beforeId);
+    pruneActiveQueue();
     if (!activeIds.length) {
       startTraining();
       return;
     }
-    activeIndex = (activeIndex + 1) % activeIds.length;
+    const stillHasCurrent = beforeId && activeIds.includes(beforeId);
+    if (!beforeHadCurrent || stillHasCurrent) {
+      activeIndex = (activeIndex + 1) % activeIds.length;
+    }
     renderCurrent();
   }
 
@@ -761,8 +802,12 @@
     }
     const ok = sameSet(chosen, correctKeys(current));
     const at = attempt(current.id);
-    if (ok) at.correct += 1;
-    else at.wrong += 1;
+    if (ok) {
+      at.correct += 1;
+      state.learned[current.id] = true;
+    } else {
+      at.wrong += 1;
+    }
     at.last = todayKey();
     state.today.done[current.id] = true;
     saveState();
@@ -857,10 +902,10 @@
     };
     $("repairStateBtn").onclick = () => {
       const summary = migrateStateForCurrentBank({ makeBackup: true });
-      activeIds = activeIds
-        .map((id) => resolveQuestionId(id, validQuestionIds()))
-        .filter(Boolean);
-      updateStats();
+      activeIds = activeIds.map((id) => resolveQuestionId(id, validQuestionIds())).filter(Boolean);
+      pruneActiveQueue();
+      if (!activeIds.length) startTraining();
+      else renderCurrent();
       alert(
         `题库记录已更新。已学会 ${summary.learned} 题，` +
         `有记录 ${summary.attempts} 题，错题 ${summary.wrong} 题。` +
