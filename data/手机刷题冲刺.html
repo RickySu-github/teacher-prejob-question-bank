@@ -256,7 +256,7 @@
     }
     .judge-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 8px;
       margin-bottom: 8px;
     }
@@ -779,6 +779,7 @@
       <div class="judge-row">
         <button id="submitBtn" class="primary">提交判分</button>
         <button id="showBtn">直接看答案</button>
+        <button id="askAiBtn">AI答疑</button>
       </div>
       <div id="resultBox" class="result"></div>
       <div class="bottom-actions">
@@ -788,8 +789,138 @@
     `;
     $("submitBtn").onclick = submitAnswer;
     $("showBtn").onclick = () => revealAnswer(null);
+    $("askAiBtn").onclick = showAiAnswer;
     $("learnedBtn").onclick = toggleLearned;
     $("nextBtn").onclick = nextQuestion;
+    updateStats();
+  }
+
+  function formatExplain(value) {
+    return escapeHtml(value).replace(/\n/g, "<br>");
+  }
+
+  function correctOptionText(q) {
+    const correct = q.options.filter((opt) => opt.is_correct);
+    if (!correct.length) return q.answer || "无";
+    return correct.map((opt) => `${opt.key}.${opt.text}`).join("；");
+  }
+
+  function wrongOptionText(q, max = 4) {
+    return q.options
+      .filter((opt) => !opt.is_correct)
+      .slice(0, max)
+      .map((opt) => `${opt.key}.${opt.text}`)
+      .join("；");
+  }
+
+  function compactText(value, maxLength = 92) {
+    const text = String(value || "").replace(/\s+/g, "");
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  }
+
+  function courseCriterion(q) {
+    const stem = String(q.stem || "");
+    if (/职责|义务|权利|责任/.test(stem)) return "职责、权利、义务或责任范围";
+    if (/特点|特征|特性/.test(stem)) return "特点或特征";
+    if (/原则|要求|规范|标准/.test(stem)) return "原则、要求或标准";
+    if (/条件|应当具备|资格|审批权限/.test(stem)) return "条件、资格或权限";
+    if (/概念|定义|是指|含义|本质/.test(stem)) return "概念定义和内涵";
+    if (/方法|途径|方式|措施|策略/.test(stem)) return "方法、途径或措施";
+    if (/包括|属于|有|哪些|下列/.test(stem)) return "标准列举项目";
+    return "课程标准表述和考点范围";
+  }
+
+  function shortcutRule(q) {
+    const text = String(q.explain || "");
+    const strict = text.match(/高置信规则：([^。]+)/);
+    if (strict) return `可用速记规则：${strict[1]}。`;
+    if (q.rule === "exception") return "规则例外题：不要按单个词片段硬套，优先记标准答案和完整语义。";
+    return "无稳定速记规则：按完整题意、正确选项和标准答案范围复核。";
+  }
+
+  function judgingRule(q) {
+    if (q.type === "tf") {
+      return `判断题规则：本题标准判断为“${q.answer}”。${shortcutRule(q)}`;
+    }
+    if (q.type === "single") {
+      return `单选题规则：只选 ${correctKeys(q).join("、")}；正确项是 ${correctOptionText(q)}。${shortcutRule(q)}`;
+    }
+    if (q.type === "multi") {
+      return `多选题规则：必须完整选择 ${correctKeys(q).join("、")}；少选、多选、错选都算错。${shortcutRule(q)}`;
+    }
+    return `判题规则：以标准答案“${q.answer}”为准。${shortcutRule(q)}`;
+  }
+
+  function courseBasis(q) {
+    const criterion = courseCriterion(q);
+    const stem = compactText(q.stem, 88);
+    if (q.type === "tf") {
+      return `教材依据：本题考查《${q.subject}》中“${stem}”这一表述是否符合${criterion}，应按题干整体语义与标准答案判断。`;
+    }
+    return `教材依据：本题考查《${q.subject}》中“${stem}”对应的${criterion}，应按定义、列举范围和限定条件判定选项。`;
+  }
+
+  function answerRationale(q) {
+    const correct = correctOptionText(q);
+    if (q.type === "tf") {
+      return q.answer === "对"
+        ? "为什么判“对”：题干整体与课程标准表述一致，没有改变概念范围或限定条件。"
+        : "为什么判“错”：题干中存在与标准表述不一致的判断，常见原因是概念等同、范围扩大、条件偷换或绝对化表达。";
+    }
+    if (q.type === "single") {
+      return `为什么选这个：${correct} 与题干要求直接对应；单选题只保留一个最符合题意的标准答案。`;
+    }
+    if (q.type === "multi") {
+      return `为什么选这些：${correct} 都落在本题所问范围内，需要作为完整集合记住。`;
+    }
+    return `为什么是这个答案：标准答案“${q.answer}”与题干所问考点直接对应。`;
+  }
+
+  function distractorRationale(q) {
+    if (q.type === "tf") return "";
+    const wrong = wrongOptionText(q, 4);
+    if (!wrong) return "错误项分析：本题所有选项都属于标准答案范围，复习时注意完整选择。";
+    return `错误项分析：${wrong} 不属于本题标准答案范围，通常是相近概念、范围不符、条件不完整或未列入的干扰项。`;
+  }
+
+  function answerGuide(q) {
+    return [
+      `关键知识点：${courseCriterion(q)}`,
+      `作答规则：${judgingRule(q)}`,
+      `标准答案：${q.answer}`,
+      `正确选项：${correctOptionText(q)}`,
+      `速记提示：${q.explain}`,
+      `题型科目：${q.subject} / ${TYPE_LABEL[q.type] || q.type}`
+    ].join("\n");
+  }
+
+  function aiExplain(q) {
+    return [
+      "解题说明：",
+      courseBasis(q),
+      answerRationale(q),
+      distractorRationale(q),
+      `作答规则：${judgingRule(q)}`,
+      `标准答案：${q.answer}`,
+      `正确选项：${correctOptionText(q)}`,
+      `速记提示：${q.explain}`,
+      `题型科目：${q.subject} / ${TYPE_LABEL[q.type] || q.type}`
+    ].filter(Boolean).join("\n");
+  }
+
+  function showAiAnswer() {
+    if (!current) return;
+    const correct = new Set(correctKeys(current));
+    document.querySelectorAll(".option").forEach((el) => {
+      const key = el.getAttribute("data-key");
+      if (correct.has(key)) el.classList.add("correct");
+    });
+    const result = $("resultBox");
+    result.className = "result show";
+    result.innerHTML = `
+      <div class="result-title">AI答疑：${escapeHtml(current.answer)}</div>
+      <div class="explain">${formatExplain(aiExplain(current))}</div>
+    `;
     updateStats();
   }
 
