@@ -1029,27 +1029,44 @@
     return `判题规则：以标准答案“${q.answer}”为准。${shortcutRule(q)}`;
   }
 
-  function courseBasis(q) {
+  function evidenceBoundary(q) {
+    return "依据边界：当前题库没有提供教材章节、页码或原文摘录；本答疑只依据本地题库的题干、选项、标准答案和速记说明解释，不编造教材出处。";
+  }
+
+  function textbookLookupClue(q) {
     const criterion = courseCriterion(q);
     const stem = compactText(q.stem, 88);
+    const anchors = splitAnchors(q.anchor).slice(0, 3).join("、") || stem;
+    return `教材复核线索：到《${q.subject}》中查“${anchors}”相关段落，重点核对${criterion}；本题题干核心是“${stem}”。`;
+  }
+
+  function standardBasis(q) {
+    const correct = correctOptionText(q);
     if (q.type === "tf") {
-      return `教材依据：本题考查《${q.subject}》中“${stem}”这一表述是否符合${criterion}，应按题干整体语义与标准答案判断。`;
+      return `题库标准依据：本题为判断题，题库标准答案是“${q.answer}”，判定对象是题干整体表述是否成立。`;
     }
-    return `教材依据：本题考查《${q.subject}》中“${stem}”对应的${criterion}，应按定义、列举范围和限定条件判定选项。`;
+    if (q.type === "single") {
+      return `题库标准依据：本题为单选题，题库只认一个最符合题干要求的答案；标准正确项是 ${correct}。`;
+    }
+    if (q.type === "multi") {
+      return `题库标准依据：本题为多选题，必须完整选择标准答案集合；标准正确项是 ${correct}。`;
+    }
+    return `题库标准依据：本题标准答案是“${q.answer}”。`;
   }
 
   function answerRationale(q) {
     const correct = correctOptionText(q);
     if (q.type === "tf") {
+      const stem = compactText(q.stem, 96);
       return q.answer === "对"
-        ? "为什么判“对”：题干整体与课程标准表述一致，没有改变概念范围或限定条件。"
-        : "为什么判“错”：题干中存在与标准表述不一致的判断，常见原因是概念等同、范围扩大、条件偷换或绝对化表达。";
+        ? `答案由来：题库把“${stem}”作为正确表述处理，复习时要保留题干中的核心限定，不要改动概念范围。`
+        : `答案由来：题库把“${stem}”判为错误，说明题干至少有一个限定、概念关系或绝对化表述不符合标准答案。复核时应对照教材原句确认被偷换的部分。`;
     }
     if (q.type === "single") {
-      return `为什么选这个：${correct} 与题干要求直接对应；单选题只保留一个最符合题意的标准答案。`;
+      return `答案由来：题干只要求一个答案，${correct} 是题库标定的唯一正确项；其它选项即使概念相近，也没有落入本题标准答案范围。`;
     }
     if (q.type === "multi") {
-      return `为什么选这些：${correct} 都落在本题所问范围内，需要作为完整集合记住。`;
+      return `答案由来：${correct} 共同构成本题标准答案集合；多选题按完整集合判分，少选、多选或错选都会改变教材概念的完整范围。`;
     }
     return `为什么是这个答案：标准答案“${q.answer}”与题干所问考点直接对应。`;
   }
@@ -1057,8 +1074,8 @@
   function distractorRationale(q) {
     if (q.type === "tf") return "";
     const wrong = wrongOptionText(q, 4);
-    if (!wrong) return "错误项分析：本题所有选项都属于标准答案范围，复习时注意完整选择。";
-    return `错误项分析：${wrong} 不属于本题标准答案范围，通常是相近概念、范围不符、条件不完整或未列入的干扰项。`;
+    if (!wrong) return "选项排除：本题所有选项都在标准答案集合内，复习时重点记完整枚举，不要漏选。";
+    return `选项排除：${wrong} 未被题库列入标准答案，通常属于相近概念、范围不符、条件不完整或未在本题所问范围内的干扰项。`;
   }
 
   function answerGuide(q) {
@@ -1075,7 +1092,9 @@
   function aiExplain(q) {
     return [
       "解题说明：",
-      courseBasis(q),
+      evidenceBoundary(q),
+      textbookLookupClue(q),
+      standardBasis(q),
       answerRationale(q),
       distractorRationale(q),
       `作答规则：${judgingRule(q)}`,
@@ -1096,7 +1115,7 @@
     const result = $("resultBox");
     result.className = "result show";
     result.innerHTML = `
-      <div class="result-title">AI答疑：${escapeHtml(current.answer)}</div>
+      <div class="result-title">AI答疑（题库依据）：${escapeHtml(current.answer)}</div>
       <div class="explain">${formatExplain(aiExplain(current))}</div>
     `;
     updateStats();
