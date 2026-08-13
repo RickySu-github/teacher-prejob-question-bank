@@ -378,8 +378,9 @@
         <label>训练模式
           <select id="modeSelect">
             <option value="daily">今日100题</option>
+            <option value="memory">记忆复习</option>
             <option value="unlearned">未学会题</option>
-            <option value="wrong">错题优先</option>
+            <option value="wrong">错题重刷</option>
             <option value="norule">无规则题</option>
             <option value="strict">高置信规则题</option>
             <option value="subject">按科目刷</option>
@@ -413,7 +414,7 @@
       <div class="plan-box">
         <div class="plan-text">
           <span id="queueText">待开始</span>
-          <span id="targetText">每日按科目比例抽 100 题，优先错题和无规则题</span>
+          <span id="targetText">每日按科目比例抽 100 题，到期复习优先</span>
         </div>
         <div class="bar"><i id="todayBar"></i></div>
       </div>
@@ -439,6 +440,7 @@
   const QUESTION_ID_MIGRATIONS = {
     "06-02-158": "06-02-069"
   };
+  const REVIEW_INTERVAL_DAYS = [2, 7, 13];
   const TYPE_LABEL = { tf: "判断", single: "单选", multi: "多选" };
   const RULE_LABEL = { strict: "高置信", exception: "规则例外", none: "无规则", other: "辅助" };
 
@@ -500,11 +502,20 @@
     for (const [id, value] of Object.entries(state.attempts || {})) {
       const resolved = resolveQuestionId(id, validIds);
       if (!resolved) continue;
-      const prev = attemptsNext[resolved] || { correct: 0, wrong: 0, last: "" };
+      const prev = attemptsNext[resolved] || { correct: 0, wrong: 0, last: "", reviewStage: 0, nextReview: "", memoryMastered: false };
+      const incomingNext = value && value.nextReview ? String(value.nextReview) : "";
+      const prevNext = prev.nextReview || "";
+      const nextReview = prevNext && incomingNext
+        ? (prevNext <= incomingNext ? prevNext : incomingNext)
+        : (prevNext || incomingNext);
       attemptsNext[resolved] = {
         correct: prev.correct + (Number(value && value.correct) || 0),
         wrong: prev.wrong + (Number(value && value.wrong) || 0),
-        last: latestDate(prev.last, value && value.last)
+        last: latestDate(prev.last, value && value.last),
+        reviewStage: Math.max(Number(prev.reviewStage) || 0, Number(value && value.reviewStage) || 0),
+        nextReview,
+        memoryMastered: nextReview ? false : !!(prev.memoryMastered || value && value.memoryMastered),
+        lastResult: value && value.lastResult || prev.lastResult || ""
       };
     }
 
@@ -531,13 +542,17 @@
       const a = attemptsNext[id];
       return !!learnedNext[id] || !!a && ((Number(a.correct) || 0) + (Number(a.wrong) || 0)) > 0;
     };
+    const dueAfterMigration = (id) => {
+      const a = attemptsNext[id];
+      return !!a && !!a.nextReview && !a.memoryMastered && a.nextReview <= todayKey();
+    };
 
     state = {
       learned: learnedNext,
       attempts: attemptsNext,
       today: {
         date: todayPrev.date || "",
-        ids: todayIds.filter((id) => !todayDone[id] && !completedAfterMigration(id)),
+        ids: todayIds.filter((id) => !todayDone[id] && (!completedAfterMigration(id) || dueAfterMigration(id))),
         done: todayDone
       }
     };
@@ -551,6 +566,7 @@
       learned: Object.keys(state.learned).length,
       attempts: Object.keys(state.attempts).length,
       wrong: Object.values(state.attempts).filter((x) => (x.wrong || 0) > 0).length,
+      due: Object.keys(state.attempts).filter((id) => isReviewDue(id)).length,
       todayDone: Object.keys(state.today.done || {}).length
     };
   }
@@ -561,6 +577,24 @@
     const m = String(now.getMonth() + 1).padStart(2, "0");
     const d = String(now.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
+  }
+
+  function dateValue(dateKey) {
+    const value = Date.parse(`${dateKey}T00:00:00`);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function addDays(dateKey, days) {
+    const base = new Date(`${dateKey}T00:00:00`);
+    base.setDate(base.getDate() + days);
+    const y = base.getFullYear();
+    const m = String(base.getMonth() + 1).padStart(2, "0");
+    const d = String(base.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function daysBetween(fromDate, toDate) {
+    return Math.round((dateValue(toDate) - dateValue(fromDate)) / 86400000);
   }
 
   function hashString(str) {
@@ -590,8 +624,67 @@
   }
 
   function attempt(id) {
-    if (!state.attempts[id]) state.attempts[id] = { correct: 0, wrong: 0, last: "" };
+    if (!state.attempts[id]) state.attempts[id] = { correct: 0, wrong: 0, last: "", reviewStage: 0, nextReview: "", memoryMastered: false };
     return state.attempts[id];
+  }
+
+  function isWrongQuestion(id) {
+    return (state.attempts[id]?.wrong || 0) > 0;
+  }
+
+  function isMemoryMastered(id) {
+    return !!state.attempts[id]?.memoryMastered;
+  }
+
+  function nextReviewDate(id) {
+    return state.attempts[id]?.nextReview || "";
+  }
+
+  function isReviewDue(id, date = todayKey()) {
+    const next = nextReviewDate(id);
+    return !!next && next <= date && !isMemoryMastered(id);
+  }
+
+  function inMemoryCycle(id) {
+    const a = state.attempts[id];
+    return !!a && !a.memoryMastered && ((a.wrong || 0) > 0 || !!a.nextReview || (Number(a.reviewStage) || 0) > 0);
+  }
+
+  function updateMemorySchedule(id, ok) {
+    const a = attempt(id);
+    const today = todayKey();
+    a.lastResult = ok ? "correct" : "wrong";
+
+    if (!ok) {
+      a.reviewStage = 0;
+      a.nextReview = today;
+      a.memoryMastered = false;
+      return;
+    }
+
+    if (!inMemoryCycle(id) && (a.wrong || 0) === 0) return;
+
+    const stage = Math.max(0, Number(a.reviewStage) || 0);
+    if (stage < REVIEW_INTERVAL_DAYS.length) {
+      a.nextReview = addDays(today, REVIEW_INTERVAL_DAYS[stage]);
+      a.reviewStage = stage + 1;
+      a.memoryMastered = false;
+    } else {
+      a.nextReview = "";
+      a.memoryMastered = true;
+    }
+  }
+
+  function reviewStatusText(id) {
+    const a = state.attempts[id];
+    if (!a || !inMemoryCycle(id)) return "";
+    if (a.memoryMastered) return "错题记忆已完成 2/7/13 天巩固。";
+    if (isReviewDue(id)) return `今日到期复习，第 ${Math.min((Number(a.reviewStage) || 0) + 1, REVIEW_INTERVAL_DAYS.length)} 轮。`;
+    if (a.nextReview) {
+      const days = Math.max(0, daysBetween(todayKey(), a.nextReview));
+      return `下次复习：${a.nextReview}（${days} 天后）。`;
+    }
+    return "";
   }
 
   function escapeHtml(value) {
@@ -646,7 +739,7 @@
     for (const subject of SUBJECTS) {
       const quota = DAILY_QUOTAS[subject] || 0;
       const candidates = QUESTIONS
-        .filter((q) => q.subject === subject && !completed(q.id))
+        .filter((q) => q.subject === subject && (isReviewDue(q.id, date) || !completed(q.id)))
         .sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
       for (const q of candidates.slice(0, quota)) {
         selected.push(q.id);
@@ -655,7 +748,7 @@
     }
     if (selected.length < 100) {
       const fill = QUESTIONS
-        .filter((q) => !used.has(q.id) && !completed(q.id))
+        .filter((q) => !used.has(q.id) && (isReviewDue(q.id, date) || !completed(q.id)))
         .sort((a, b) => dailyScore(b, date) - dailyScore(a, date));
       for (const q of fill.slice(0, 100 - selected.length)) selected.push(q.id);
     }
@@ -665,11 +758,15 @@
 
   function dailyScore(q, date) {
     const a = state.attempts[q.id] || { correct: 0, wrong: 0 };
+    const next = nextReviewDate(q.id);
+    const overdueDays = next && next <= date ? Math.max(0, daysBetween(next, date)) : 0;
+    const dueBias = isReviewDue(q.id, date) ? 10000 + overdueDays * 100 : 0;
+    const memoryBias = inMemoryCycle(q.id) ? 500 : 0;
     const wrongBias = Math.min(a.wrong || 0, 5) * 100;
     const newBias = ((a.correct || 0) + (a.wrong || 0)) === 0 ? 30 : 0;
     const ruleBias = q.rule === "none" ? 24 : q.rule === "exception" ? 18 : 8;
     const jitter = seededUnit(`${date}|${q.id}`) * 10;
-    return wrongBias + newBias + ruleBias + jitter;
+    return dueBias + memoryBias + wrongBias + newBias + ruleBias + jitter;
   }
 
   function filteredIds() {
@@ -680,7 +777,8 @@
     resetToday(false);
     let list = QUESTIONS;
     if (mode === "daily") list = state.today.ids.map(questionById).filter(Boolean);
-    if (mode === "wrong") list = QUESTIONS.filter((q) => (state.attempts[q.id]?.wrong || 0) > 0);
+    if (mode === "memory") list = QUESTIONS.filter((q) => isReviewDue(q.id) || (isWrongQuestion(q.id) && !isMemoryMastered(q.id)));
+    if (mode === "wrong") list = QUESTIONS.filter((q) => isWrongQuestion(q.id) && !isMemoryMastered(q.id));
     if (mode === "norule") list = QUESTIONS.filter((q) => q.rule === "none");
     if (mode === "strict") list = QUESTIONS.filter((q) => q.rule === "strict" || q.rule === "exception");
     if (mode === "subject" && subject !== "all") list = QUESTIONS.filter((q) => q.subject === subject);
@@ -688,10 +786,10 @@
     if (mode !== "subject" && subject !== "all") list = list.filter((q) => q.subject === subject);
     if (type !== "all") list = list.filter((q) => q.type === type);
     if (learnedMode === "hide") {
-      if (mode === "wrong") {
-        list = list.filter((q) => !learned(q.id));
+      if (mode === "memory" || mode === "wrong") {
+        list = list.filter((q) => !isMemoryMastered(q.id));
       } else {
-        list = list.filter((q) => !completed(q.id) && !(mode === "daily" && state.today?.done?.[q.id]));
+        list = list.filter((q) => (isReviewDue(q.id) || !completed(q.id)) && !(mode === "daily" && state.today?.done?.[q.id]));
       }
     }
     if (mode !== "daily") {
@@ -706,7 +804,9 @@
     const mode = $("modeSelect")?.value || "daily";
     const learnedMode = $("learnedFilter")?.value || "hide";
     if (learnedMode !== "hide") return true;
-    if (mode === "wrong") return (state.attempts[id]?.wrong || 0) > 0 && !learned(id);
+    if (mode === "memory") return isReviewDue(id) || (isWrongQuestion(id) && !isMemoryMastered(id));
+    if (mode === "wrong") return isWrongQuestion(id) && !isMemoryMastered(id);
+    if (mode === "daily" && isReviewDue(id)) return !state.today?.done?.[id];
     if (mode === "daily" && state.today?.done?.[id]) return false;
     return !completed(id);
   }
@@ -764,6 +864,9 @@
         <span class="tag">${TYPE_LABEL[current.type] || current.type}</span>
         <span class="tag ${ruleClass}">${RULE_LABEL[current.rule] || "辅助"}</span>
         ${at.wrong ? `<span class="tag wrong">错 ${at.wrong}</span>` : ""}
+        ${isReviewDue(current.id) ? '<span class="tag strict">今日复习</span>' : ""}
+        ${at.nextReview && !isReviewDue(current.id) ? `<span class="tag">复习 ${escapeHtml(at.nextReview)}</span>` : ""}
+        ${isMemoryMastered(current.id) ? '<span class="tag strict">记忆完成</span>' : ""}
         ${learned(current.id) ? '<span class="tag strict">已学会</span>' : ""}
       </div>
       <p class="stem">${highlightText(current.stem, stemTerms)}</p>
@@ -940,6 +1043,7 @@
       at.wrong += 1;
     }
     at.last = todayKey();
+    updateMemorySchedule(current.id, ok);
     state.today.done[current.id] = true;
     saveState();
     revealAnswer(ok);
@@ -962,6 +1066,7 @@
     result.innerHTML = `
       <div class="result-title">${known ? (isCorrect ? "答对" : "答错") : "参考答案"}：${escapeHtml(current.answer)}</div>
       <div class="explain">${escapeHtml(current.explain)}</div>
+      ${reviewStatusText(current.id) ? `<div class="explain">${escapeHtml(reviewStatusText(current.id))}</div>` : ""}
     `;
     updateStats();
   }
@@ -978,6 +1083,8 @@
     const total = QUESTIONS.length;
     const learnedCount = Object.keys(state.learned).length;
     const wrongCount = Object.values(state.attempts).filter((x) => (x.wrong || 0) > 0).length;
+    const dueReviewCount = QUESTIONS.filter((q) => isReviewDue(q.id)).length;
+    const memoryCount = QUESTIONS.filter((q) => inMemoryCycle(q.id)).length;
     const todayDone = state.today?.date === todayKey() ? Object.keys(state.today.done || {}).length : 0;
     const days = Math.max(0, Math.ceil((new Date(EXAM_DATE + "T00:00:00") - new Date()) / 86400000));
     $("kpiToday").textContent = `${Math.min(todayDone, 100)}/100`;
@@ -988,17 +1095,26 @@
     $("queueText").textContent = activeIds.length
       ? `当前队列 ${activeIndex + 1}/${activeIds.length}`
       : `共 ${total} 题，已学会 ${((learnedCount / total) * 100).toFixed(1)}%`;
+    const mode = $("modeSelect")?.value || "daily";
+    if (mode === "memory") {
+      $("targetText").textContent = `今日到期 ${dueReviewCount} 题；记忆周期内 ${memoryCount} 题`;
+    } else if (mode === "wrong") {
+      $("targetText").textContent = `错题重刷 ${wrongCount} 题；答对后按 2/7/13 天巩固`;
+    } else {
+      $("targetText").textContent = `每日按科目比例抽 100 题；今日到期复习 ${dueReviewCount} 题优先`;
+    }
     renderSubjectProgress();
   }
 
   function renderSubjectProgress() {
     const grouped = new Map();
     for (const q of QUESTIONS) {
-      if (!grouped.has(q.subject)) grouped.set(q.subject, { total: 0, learned: 0, wrong: 0 });
+      if (!grouped.has(q.subject)) grouped.set(q.subject, { total: 0, learned: 0, wrong: 0, due: 0 });
       const g = grouped.get(q.subject);
       g.total += 1;
       if (learned(q.id)) g.learned += 1;
       if ((state.attempts[q.id]?.wrong || 0) > 0) g.wrong += 1;
+      if (isReviewDue(q.id)) g.due += 1;
     }
     $("subjectList").innerHTML = SUBJECTS.map((subject) => {
       const g = grouped.get(subject);
@@ -1008,7 +1124,7 @@
         <div class="subject-row">
           <span>${escapeHtml(subject)}</span>
           <span>${g.learned}/${target}</span>
-          <span>错 ${g.wrong}</span>
+          <span>错 ${g.wrong} · 复 ${g.due}</span>
           <span class="mini"><i style="width:${pct.toFixed(1)}%"></i></span>
         </div>
       `;
@@ -1039,7 +1155,7 @@
       else renderCurrent();
       alert(
         `题库记录已更新。已学会 ${summary.learned} 题，` +
-        `有记录 ${summary.attempts} 题，错题 ${summary.wrong} 题。` +
+        `有记录 ${summary.attempts} 题，错题 ${summary.wrong} 题，到期复习 ${summary.due} 题。` +
         (summary.changed ? "迁移前记录已备份。" : "记录无需变更。")
       );
     };
