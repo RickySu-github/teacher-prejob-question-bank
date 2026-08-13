@@ -843,7 +843,7 @@
     resetToday(false);
     let list = QUESTIONS;
     if (mode === "daily") list = state.today.ids.map(questionById).filter(Boolean);
-    if (mode === "memory") list = QUESTIONS.filter((q) => isReviewDue(q.id) || (isWrongQuestion(q.id) && !isMemoryMastered(q.id)));
+    if (mode === "memory") list = QUESTIONS.filter((q) => isReviewDue(q.id));
     if (mode === "wrong") list = QUESTIONS.filter((q) => isActiveWrongQuestion(q.id));
     if (mode === "norule") list = QUESTIONS.filter((q) => q.rule === "none");
     if (mode === "strict") list = QUESTIONS.filter((q) => q.rule === "strict" || q.rule === "exception");
@@ -870,8 +870,8 @@
     const mode = $("modeSelect")?.value || "daily";
     const learnedMode = $("learnedFilter")?.value || "hide";
     if (mode === "wrong") return isActiveWrongQuestion(id);
+    if (mode === "memory") return isReviewDue(id);
     if (learnedMode !== "hide") return true;
-    if (mode === "memory") return isReviewDue(id) || (isWrongQuestion(id) && !isMemoryMastered(id));
     if (mode === "daily" && isReviewDue(id)) return !state.today?.done?.[id];
     if (mode === "daily" && state.today?.done?.[id]) return false;
     return !completed(id);
@@ -899,16 +899,14 @@
 
   function nextQuestion() {
     const beforeId = current && current.id;
-    const beforeHadCurrent = beforeId && activeIds.includes(beforeId);
-    pruneActiveQueue();
+    activeIds = filteredIds();
     if (!activeIds.length) {
-      startTraining();
+      activeIndex = 0;
+      renderCurrent();
       return;
     }
-    const stillHasCurrent = beforeId && activeIds.includes(beforeId);
-    if (!beforeHadCurrent || stillHasCurrent) {
-      activeIndex = (activeIndex + 1) % activeIds.length;
-    }
+    const currentIndex = beforeId ? activeIds.indexOf(beforeId) : -1;
+    activeIndex = currentIndex >= 0 ? (currentIndex + 1) % activeIds.length : 0;
     renderCurrent();
   }
 
@@ -1163,7 +1161,6 @@
     const learnedCount = Object.keys(state.learned).length;
     const activeWrongCount = QUESTIONS.filter((q) => isActiveWrongQuestion(q.id)).length;
     const dueReviewCount = QUESTIONS.filter((q) => isReviewDue(q.id)).length;
-    const memoryCount = QUESTIONS.filter((q) => inMemoryCycle(q.id)).length;
     const todayDone = state.today?.date === todayKey() ? Object.keys(state.today.done || {}).length : 0;
     const days = Math.max(0, Math.ceil((new Date(EXAM_DATE + "T00:00:00") - new Date()) / 86400000));
     $("kpiToday").textContent = `${Math.min(todayDone, 100)}/100`;
@@ -1176,7 +1173,7 @@
       : `共 ${total} 题，已学会 ${((learnedCount / total) * 100).toFixed(1)}%`;
     const mode = $("modeSelect")?.value || "daily";
     if (mode === "memory") {
-      $("targetText").textContent = `今日到期 ${dueReviewCount} 题；记忆周期内 ${memoryCount} 题；${reviewStrategyLabel()}`;
+      $("targetText").textContent = `记忆复习只出今日到期/逾期题：${dueReviewCount} 题；${reviewStrategyLabel()}`;
     } else if (mode === "wrong") {
       $("targetText").textContent = `错题刷题 ${activeWrongCount} 题；最近一次已答对的题不列入错题库`;
     } else {
