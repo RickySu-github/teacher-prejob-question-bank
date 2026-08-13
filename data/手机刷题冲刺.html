@@ -996,112 +996,43 @@
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
   }
 
-  function courseCriterion(q) {
-    const stem = String(q.stem || "");
-    if (/职责|义务|权利|责任/.test(stem)) return "职责、权利、义务或责任范围";
-    if (/特点|特征|特性/.test(stem)) return "特点或特征";
-    if (/原则|要求|规范|标准/.test(stem)) return "原则、要求或标准";
-    if (/条件|应当具备|资格|审批权限/.test(stem)) return "条件、资格或权限";
-    if (/概念|定义|是指|含义|本质/.test(stem)) return "概念定义和内涵";
-    if (/方法|途径|方式|措施|策略/.test(stem)) return "方法、途径或措施";
-    if (/包括|属于|有|哪些|下列/.test(stem)) return "标准列举项目";
-    return "课程标准表述和考点范围";
-  }
-
-  function shortcutRule(q) {
-    const text = String(q.explain || "");
-    const strict = text.match(/高置信规则：([^。]+)/);
-    if (strict) return `可用速记规则：${strict[1]}。`;
-    if (q.rule === "exception") return "规则例外题：不要按单个词片段硬套，优先记标准答案和完整语义。";
-    return "无稳定速记规则：按完整题意、正确选项和标准答案范围复核。";
-  }
-
-  function judgingRule(q) {
-    if (q.type === "tf") {
-      return `判断题规则：本题标准判断为“${q.answer}”。${shortcutRule(q)}`;
-    }
-    if (q.type === "single") {
-      return `单选题规则：只选 ${correctKeys(q).join("、")}；正确项是 ${correctOptionText(q)}。${shortcutRule(q)}`;
-    }
-    if (q.type === "multi") {
-      return `多选题规则：必须完整选择 ${correctKeys(q).join("、")}；少选、多选、错选都算错。${shortcutRule(q)}`;
-    }
-    return `判题规则：以标准答案“${q.answer}”为准。${shortcutRule(q)}`;
-  }
-
-  function evidenceBoundary(q) {
-    return "依据边界：当前题库没有提供教材章节、页码或原文摘录；本答疑只依据本地题库的题干、选项、标准答案和速记说明解释，不编造教材出处。";
-  }
-
-  function textbookLookupClue(q) {
-    const criterion = courseCriterion(q);
-    const stem = compactText(q.stem, 88);
-    const anchors = splitAnchors(q.anchor).slice(0, 3).join("、") || stem;
-    return `教材复核线索：到《${q.subject}》中查“${anchors}”相关段落，重点核对${criterion}；本题题干核心是“${stem}”。`;
-  }
-
-  function standardBasis(q) {
-    const correct = correctOptionText(q);
-    if (q.type === "tf") {
-      return `题库标准依据：本题为判断题，题库标准答案是“${q.answer}”，判定对象是题干整体表述是否成立。`;
-    }
-    if (q.type === "single") {
-      return `题库标准依据：本题为单选题，题库只认一个最符合题干要求的答案；标准正确项是 ${correct}。`;
-    }
-    if (q.type === "multi") {
-      return `题库标准依据：本题为多选题，必须完整选择标准答案集合；标准正确项是 ${correct}。`;
-    }
-    return `题库标准依据：本题标准答案是“${q.answer}”。`;
-  }
-
   function answerRationale(q) {
     const correct = correctOptionText(q);
     if (q.type === "tf") {
       const stem = compactText(q.stem, 96);
       return q.answer === "对"
-        ? `答案由来：题库把“${stem}”作为正确表述处理，复习时要保留题干中的核心限定，不要改动概念范围。`
-        : `答案由来：题库把“${stem}”判为错误，说明题干至少有一个限定、概念关系或绝对化表述不符合标准答案。复核时应对照教材原句确认被偷换的部分。`;
+        ? `题干“${stem}”被题库判定为正确表述，答题时保留题干核心限定即可。`
+        : `题干“${stem}”被题库判定为错误，说明其中存在概念、范围、条件或绝对化表述与标准答案不一致。`;
     }
     if (q.type === "single") {
-      return `答案由来：题干只要求一个答案，${correct} 是题库标定的唯一正确项；其它选项即使概念相近，也没有落入本题标准答案范围。`;
+      return `题干只要求一个答案，${correct} 是唯一正确项，直接对应题干所问范围。`;
     }
     if (q.type === "multi") {
-      return `答案由来：${correct} 共同构成本题标准答案集合；多选题按完整集合判分，少选、多选或错选都会改变教材概念的完整范围。`;
+      return `${correct} 共同构成标准答案集合，必须完整选择；少选、多选或错选都会改变本题概念范围。`;
     }
-    return `为什么是这个答案：标准答案“${q.answer}”与题干所问考点直接对应。`;
+    return `标准答案“${q.answer}”与题干所问考点直接对应。`;
   }
 
   function distractorRationale(q) {
-    if (q.type === "tf") return "";
+    if (q.type === "tf") return q.answer === "对"
+      ? "误导手段：通常会把正确表述改成看似过度概括的判断，容易让人误判为错。"
+      : "误导手段：常见是概念等同、范围扩大缩小、条件偷换或使用绝对化表达。";
     const wrong = wrongOptionText(q, 4);
-    if (!wrong) return "选项排除：本题所有选项都在标准答案集合内，复习时重点记完整枚举，不要漏选。";
-    return `选项排除：${wrong} 未被题库列入标准答案，通常属于相近概念、范围不符、条件不完整或未在本题所问范围内的干扰项。`;
+    if (!wrong) return "误导手段：本题为全选或无明显干扰项，主要误导是漏选。";
+    return `误导手段：${wrong} 属于相近概念、范围不符、条件不完整或未在题干所问范围内的干扰项。`;
   }
 
-  function answerGuide(q) {
-    return [
-      `关键知识点：${courseCriterion(q)}`,
-      `作答规则：${judgingRule(q)}`,
-      `标准答案：${q.answer}`,
-      `正确选项：${correctOptionText(q)}`,
-      `速记提示：${q.explain}`,
-      `题型科目：${q.subject} / ${TYPE_LABEL[q.type] || q.type}`
-    ].join("\n");
+  function designIntent(q) {
+    if (q.type === "tf") return `题目设计意图：考查对“${compactText(q.stem, 72)}”这一表述的整体判断。`;
+    return `题目设计意图：考查能否围绕“${compactText(q.stem, 72)}”识别标准答案范围。`;
   }
 
   function aiExplain(q) {
     return [
-      "解题说明：",
-      evidenceBoundary(q),
-      textbookLookupClue(q),
-      standardBasis(q),
-      answerRationale(q),
-      distractorRationale(q),
-      `作答规则：${judgingRule(q)}`,
-      `标准答案：${q.answer}`,
-      `正确选项：${correctOptionText(q)}`,
-      `速记提示：${q.explain}`,
-      `题型科目：${q.subject} / ${TYPE_LABEL[q.type] || q.type}`
+      `正确答案：${q.answer}`,
+      `分析答案由来：${answerRationale(q)}`,
+      designIntent(q),
+      distractorRationale(q)
     ].filter(Boolean).join("\n");
   }
 
@@ -1115,7 +1046,7 @@
     const result = $("resultBox");
     result.className = "result show";
     result.innerHTML = `
-      <div class="result-title">AI答疑（题库依据）：${escapeHtml(current.answer)}</div>
+      <div class="result-title">AI答疑：${escapeHtml(current.answer)}</div>
       <div class="explain">${formatExplain(aiExplain(current))}</div>
     `;
     updateStats();
