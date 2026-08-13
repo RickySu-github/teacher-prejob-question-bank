@@ -888,6 +888,15 @@
     renderCurrent();
   }
 
+  function prepareTraining() {
+    activeIds = [];
+    activeIndex = 0;
+    current = null;
+    answered = false;
+    $("questionBox").innerHTML = '<div class="empty">训练条件已更新，点击“开始训练”后开始刷题。</div>';
+    updateStats();
+  }
+
   function nextQuestion() {
     const beforeId = current && current.id;
     const beforeHadCurrent = beforeId && activeIds.includes(beforeId);
@@ -1230,7 +1239,7 @@
       );
     };
     ["modeSelect", "subjectSelect", "typeSelect", "learnedFilter"].forEach((id) => {
-      $(id).onchange = startTraining;
+      $(id).onchange = prepareTraining;
     });
     migrateStateForCurrentBank({ makeBackup: true });
     resetToday(false);
