@@ -440,7 +440,7 @@
   const QUESTION_ID_MIGRATIONS = {
     "06-02-158": "06-02-069"
   };
-  const REVIEW_INTERVAL_DAYS = [2, 7, 13];
+  const REVIEW_MAX_STAGE = 4;
   const TYPE_LABEL = { tf: "判断", single: "单选", multi: "多选" };
   const RULE_LABEL = { strict: "高置信", exception: "规则例外", none: "无规则", other: "辅助" };
 
@@ -481,6 +481,12 @@
     return a > b ? a : b;
   }
 
+  function earliestDate(a, b) {
+    if (!a) return b || "";
+    if (!b) return a || "";
+    return a < b ? a : b;
+  }
+
   function backupStateBeforeBankUpdate(previousState) {
     localStorage.setItem(BACKUP_STORE_KEY, JSON.stringify({
       time: new Date().toISOString(),
@@ -502,16 +508,20 @@
     for (const [id, value] of Object.entries(state.attempts || {})) {
       const resolved = resolveQuestionId(id, validIds);
       if (!resolved) continue;
-      const prev = attemptsNext[resolved] || { correct: 0, wrong: 0, last: "", reviewStage: 0, nextReview: "", memoryMastered: false };
+      const prev = attemptsNext[resolved] || { correct: 0, wrong: 0, last: "", firstSeen: "", reviewStage: 0, nextReview: "", memoryMastered: false };
       const incomingNext = value && value.nextReview ? String(value.nextReview) : "";
       const prevNext = prev.nextReview || "";
       const nextReview = prevNext && incomingNext
         ? (prevNext <= incomingNext ? prevNext : incomingNext)
         : (prevNext || incomingNext);
+      const incomingFirstSeen = value && (value.firstSeen || value.firstAttempt || value.last)
+        ? String(value.firstSeen || value.firstAttempt || value.last)
+        : "";
       attemptsNext[resolved] = {
         correct: prev.correct + (Number(value && value.correct) || 0),
         wrong: prev.wrong + (Number(value && value.wrong) || 0),
         last: latestDate(prev.last, value && value.last),
+        firstSeen: earliestDate(prev.firstSeen, incomingFirstSeen),
         reviewStage: Math.max(Number(prev.reviewStage) || 0, Number(value && value.reviewStage) || 0),
         nextReview,
         memoryMastered: nextReview ? false : !!(prev.memoryMastered || value && value.memoryMastered),
@@ -597,6 +607,10 @@
     return Math.round((dateValue(toDate) - dateValue(fromDate)) / 86400000);
   }
 
+  function daysUntilExam(date = todayKey()) {
+    return Math.max(0, daysBetween(date, EXAM_DATE));
+  }
+
   function hashString(str) {
     let h = 2166136261;
     for (let i = 0; i < str.length; i++) {
@@ -624,7 +638,7 @@
   }
 
   function attempt(id) {
-    if (!state.attempts[id]) state.attempts[id] = { correct: 0, wrong: 0, last: "", reviewStage: 0, nextReview: "", memoryMastered: false };
+    if (!state.attempts[id]) state.attempts[id] = { correct: 0, wrong: 0, last: "", firstSeen: "", reviewStage: 0, nextReview: "", memoryMastered: false };
     return state.attempts[id];
   }
 
@@ -650,6 +664,33 @@
     return !!a && !a.memoryMastered && ((a.wrong || 0) > 0 || !!a.nextReview || (Number(a.reviewStage) || 0) > 0);
   }
 
+  function reviewAgeDays(id, date = todayKey()) {
+    const a = state.attempts[id];
+    const first = a && (a.firstSeen || a.last);
+    if (!first) return null;
+    return Math.max(0, daysBetween(first, date));
+  }
+
+  function reviewAgeTag(id, date = todayKey()) {
+    const days = reviewAgeDays(id, date);
+    return days === null ? "" : `距首次 ${days} 天`;
+  }
+
+  function adaptiveReviewInterval(stage, date = todayKey()) {
+    if (stage <= 0) return 1;
+    const remaining = daysUntilExam(date);
+    if (remaining <= 1) return remaining;
+    const ratio = stage === 1 ? 0.12 : 0.18;
+    const target = Math.round(remaining * ratio);
+    const minimum = stage === 1 ? 2 : 3;
+    const base = stage === 1 ? 3 : stage === 2 ? 7 : 14;
+    return Math.max(1, Math.min(base, remaining - 1, Math.max(minimum, target)));
+  }
+
+  function reviewStrategyLabel() {
+    return "按考试倒计时自适应复习：答错当天重刷，首次答对次日复习，之后按剩余天数约 10%-20% 扩展。";
+  }
+
   function updateMemorySchedule(id, ok) {
     const a = attempt(id);
     const today = todayKey();
@@ -665,8 +706,9 @@
     if (!inMemoryCycle(id) && (a.wrong || 0) === 0) return;
 
     const stage = Math.max(0, Number(a.reviewStage) || 0);
-    if (stage < REVIEW_INTERVAL_DAYS.length) {
-      a.nextReview = addDays(today, REVIEW_INTERVAL_DAYS[stage]);
+    if (stage < REVIEW_MAX_STAGE) {
+      const interval = adaptiveReviewInterval(stage, today);
+      a.nextReview = interval > 0 ? addDays(today, interval) : today;
       a.reviewStage = stage + 1;
       a.memoryMastered = false;
     } else {
@@ -678,11 +720,12 @@
   function reviewStatusText(id) {
     const a = state.attempts[id];
     if (!a || !inMemoryCycle(id)) return "";
-    if (a.memoryMastered) return "错题记忆已完成 2/7/13 天巩固。";
-    if (isReviewDue(id)) return `今日到期复习，第 ${Math.min((Number(a.reviewStage) || 0) + 1, REVIEW_INTERVAL_DAYS.length)} 轮。`;
+    const age = reviewAgeTag(id);
+    if (a.memoryMastered) return `错题记忆已完成。${age}`;
+    if (isReviewDue(id)) return `今日到期复习，第 ${Math.min((Number(a.reviewStage) || 0) + 1, REVIEW_MAX_STAGE)} 轮。${age}`;
     if (a.nextReview) {
       const days = Math.max(0, daysBetween(todayKey(), a.nextReview));
-      return `下次复习：${a.nextReview}（${days} 天后）。`;
+      return `下次复习：${a.nextReview}（${days} 天后）。${age}`;
     }
     return "";
   }
@@ -865,6 +908,7 @@
         <span class="tag ${ruleClass}">${RULE_LABEL[current.rule] || "辅助"}</span>
         ${at.wrong ? `<span class="tag wrong">错 ${at.wrong}</span>` : ""}
         ${isReviewDue(current.id) ? '<span class="tag strict">今日复习</span>' : ""}
+        ${inMemoryCycle(current.id) && reviewAgeTag(current.id) ? `<span class="tag">${escapeHtml(reviewAgeTag(current.id))}</span>` : ""}
         ${at.nextReview && !isReviewDue(current.id) ? `<span class="tag">复习 ${escapeHtml(at.nextReview)}</span>` : ""}
         ${isMemoryMastered(current.id) ? '<span class="tag strict">记忆完成</span>' : ""}
         ${learned(current.id) ? '<span class="tag strict">已学会</span>' : ""}
@@ -1036,6 +1080,7 @@
     }
     const ok = sameSet(chosen, correctKeys(current));
     const at = attempt(current.id);
+    if (!at.firstSeen) at.firstSeen = todayKey();
     if (ok) {
       at.correct += 1;
       state.learned[current.id] = true;
@@ -1097,9 +1142,9 @@
       : `共 ${total} 题，已学会 ${((learnedCount / total) * 100).toFixed(1)}%`;
     const mode = $("modeSelect")?.value || "daily";
     if (mode === "memory") {
-      $("targetText").textContent = `今日到期 ${dueReviewCount} 题；记忆周期内 ${memoryCount} 题`;
+      $("targetText").textContent = `今日到期 ${dueReviewCount} 题；记忆周期内 ${memoryCount} 题；${reviewStrategyLabel()}`;
     } else if (mode === "wrong") {
-      $("targetText").textContent = `错题重刷 ${wrongCount} 题；答对后按 2/7/13 天巩固`;
+      $("targetText").textContent = `错题重刷 ${wrongCount} 题；${reviewStrategyLabel()}`;
     } else {
       $("targetText").textContent = `每日按科目比例抽 100 题；今日到期复习 ${dueReviewCount} 题优先`;
     }
