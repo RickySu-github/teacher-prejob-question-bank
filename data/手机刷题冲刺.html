@@ -380,7 +380,7 @@
             <option value="daily">今日100题</option>
             <option value="memory">记忆复习</option>
             <option value="unlearned">未学会题</option>
-            <option value="wrong">错题重刷</option>
+            <option value="wrong">错题刷题</option>
             <option value="norule">无规则题</option>
             <option value="strict">高置信规则题</option>
             <option value="subject">按科目刷</option>
@@ -651,6 +651,12 @@
     return (state.attempts[id]?.wrong || 0) > 0;
   }
 
+  function isActiveWrongQuestion(id) {
+    const a = state.attempts[id];
+    if (!a || (a.wrong || 0) <= 0) return false;
+    return a.lastResult !== "correct";
+  }
+
   function isMemoryMastered(id) {
     return !!state.attempts[id]?.memoryMastered;
   }
@@ -838,7 +844,7 @@
     let list = QUESTIONS;
     if (mode === "daily") list = state.today.ids.map(questionById).filter(Boolean);
     if (mode === "memory") list = QUESTIONS.filter((q) => isReviewDue(q.id) || (isWrongQuestion(q.id) && !isMemoryMastered(q.id)));
-    if (mode === "wrong") list = QUESTIONS.filter((q) => isWrongQuestion(q.id) && !isMemoryMastered(q.id));
+    if (mode === "wrong") list = QUESTIONS.filter((q) => isActiveWrongQuestion(q.id));
     if (mode === "norule") list = QUESTIONS.filter((q) => q.rule === "none");
     if (mode === "strict") list = QUESTIONS.filter((q) => q.rule === "strict" || q.rule === "exception");
     if (mode === "subject" && subject !== "all") list = QUESTIONS.filter((q) => q.subject === subject);
@@ -863,9 +869,9 @@
     if (!questionById(id)) return false;
     const mode = $("modeSelect")?.value || "daily";
     const learnedMode = $("learnedFilter")?.value || "hide";
+    if (mode === "wrong") return isActiveWrongQuestion(id);
     if (learnedMode !== "hide") return true;
     if (mode === "memory") return isReviewDue(id) || (isWrongQuestion(id) && !isMemoryMastered(id));
-    if (mode === "wrong") return isWrongQuestion(id) && !isMemoryMastered(id);
     if (mode === "daily" && isReviewDue(id)) return !state.today?.done?.[id];
     if (mode === "daily" && state.today?.done?.[id]) return false;
     return !completed(id);
@@ -1146,14 +1152,14 @@
   function updateStats() {
     const total = QUESTIONS.length;
     const learnedCount = Object.keys(state.learned).length;
-    const wrongCount = Object.values(state.attempts).filter((x) => (x.wrong || 0) > 0).length;
+    const activeWrongCount = QUESTIONS.filter((q) => isActiveWrongQuestion(q.id)).length;
     const dueReviewCount = QUESTIONS.filter((q) => isReviewDue(q.id)).length;
     const memoryCount = QUESTIONS.filter((q) => inMemoryCycle(q.id)).length;
     const todayDone = state.today?.date === todayKey() ? Object.keys(state.today.done || {}).length : 0;
     const days = Math.max(0, Math.ceil((new Date(EXAM_DATE + "T00:00:00") - new Date()) / 86400000));
     $("kpiToday").textContent = `${Math.min(todayDone, 100)}/100`;
     $("kpiLearned").textContent = `${learnedCount}/${total}`;
-    $("kpiWrong").textContent = String(wrongCount);
+    $("kpiWrong").textContent = String(activeWrongCount);
     $("kpiDays").textContent = `${days}天`;
     $("todayBar").style.width = `${Math.min(100, todayDone)}%`;
     $("queueText").textContent = activeIds.length
@@ -1163,7 +1169,7 @@
     if (mode === "memory") {
       $("targetText").textContent = `今日到期 ${dueReviewCount} 题；记忆周期内 ${memoryCount} 题；${reviewStrategyLabel()}`;
     } else if (mode === "wrong") {
-      $("targetText").textContent = `错题重刷 ${wrongCount} 题；${reviewStrategyLabel()}`;
+      $("targetText").textContent = `错题刷题 ${activeWrongCount} 题；最近一次已答对的题不列入错题库`;
     } else {
       $("targetText").textContent = `每日按科目比例抽 100 题；今日到期复习 ${dueReviewCount} 题优先`;
     }
@@ -1177,7 +1183,7 @@
       const g = grouped.get(q.subject);
       g.total += 1;
       if (learned(q.id)) g.learned += 1;
-      if ((state.attempts[q.id]?.wrong || 0) > 0) g.wrong += 1;
+      if (isActiveWrongQuestion(q.id)) g.wrong += 1;
       if (isReviewDue(q.id)) g.due += 1;
     }
     $("subjectList").innerHTML = SUBJECTS.map((subject) => {
