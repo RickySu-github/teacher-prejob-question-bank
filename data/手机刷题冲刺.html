@@ -508,7 +508,7 @@
     for (const [id, value] of Object.entries(state.attempts || {})) {
       const resolved = resolveQuestionId(id, validIds);
       if (!resolved) continue;
-      const prev = attemptsNext[resolved] || { correct: 0, wrong: 0, last: "", firstSeen: "", reviewStage: 0, nextReview: "", memoryMastered: false };
+      const prev = attemptsNext[resolved] || { correct: 0, wrong: 0, last: "", firstSeen: "", firstWrong: "", reviewStage: 0, nextReview: "", memoryMastered: false };
       const incomingNext = value && value.nextReview ? String(value.nextReview) : "";
       const prevNext = prev.nextReview || "";
       const nextReview = prevNext && incomingNext
@@ -517,11 +517,16 @@
       const incomingFirstSeen = value && (value.firstSeen || value.firstAttempt || value.last)
         ? String(value.firstSeen || value.firstAttempt || value.last)
         : "";
+      const incomingWrong = Number(value && value.wrong) || 0;
+      const incomingFirstWrong = value && (value.firstWrong || (incomingWrong > 0 ? value.last : ""))
+        ? String(value.firstWrong || value.last)
+        : "";
       attemptsNext[resolved] = {
         correct: prev.correct + (Number(value && value.correct) || 0),
-        wrong: prev.wrong + (Number(value && value.wrong) || 0),
+        wrong: prev.wrong + incomingWrong,
         last: latestDate(prev.last, value && value.last),
         firstSeen: earliestDate(prev.firstSeen, incomingFirstSeen),
+        firstWrong: earliestDate(prev.firstWrong, incomingFirstWrong),
         reviewStage: Math.max(Number(prev.reviewStage) || 0, Number(value && value.reviewStage) || 0),
         nextReview,
         memoryMastered: nextReview ? false : !!(prev.memoryMastered || value && value.memoryMastered),
@@ -638,7 +643,7 @@
   }
 
   function attempt(id) {
-    if (!state.attempts[id]) state.attempts[id] = { correct: 0, wrong: 0, last: "", firstSeen: "", reviewStage: 0, nextReview: "", memoryMastered: false };
+    if (!state.attempts[id]) state.attempts[id] = { correct: 0, wrong: 0, last: "", firstSeen: "", firstWrong: "", reviewStage: 0, nextReview: "", memoryMastered: false };
     return state.attempts[id];
   }
 
@@ -674,6 +679,18 @@
   function reviewAgeTag(id, date = todayKey()) {
     const days = reviewAgeDays(id, date);
     return days === null ? "" : `距首次 ${days} 天`;
+  }
+
+  function wrongAgeDays(id, date = todayKey()) {
+    const a = state.attempts[id];
+    const firstWrong = a && (a.firstWrong || ((a.wrong || 0) > 0 ? a.last : ""));
+    if (!firstWrong) return null;
+    return Math.max(0, daysBetween(firstWrong, date));
+  }
+
+  function wrongAgeTag(id, date = todayKey()) {
+    const days = wrongAgeDays(id, date);
+    return days === null ? "" : `错后第 ${days} 天`;
   }
 
   function adaptiveReviewInterval(stage, date = todayKey()) {
@@ -907,6 +924,7 @@
         <span class="tag">${TYPE_LABEL[current.type] || current.type}</span>
         <span class="tag ${ruleClass}">${RULE_LABEL[current.rule] || "辅助"}</span>
         ${at.wrong ? `<span class="tag wrong">错 ${at.wrong}</span>` : ""}
+        ${isWrongQuestion(current.id) && wrongAgeTag(current.id) ? `<span class="tag wrong">${escapeHtml(wrongAgeTag(current.id))}</span>` : ""}
         ${isReviewDue(current.id) ? '<span class="tag strict">今日复习</span>' : ""}
         ${inMemoryCycle(current.id) && reviewAgeTag(current.id) ? `<span class="tag">${escapeHtml(reviewAgeTag(current.id))}</span>` : ""}
         ${at.nextReview && !isReviewDue(current.id) ? `<span class="tag">复习 ${escapeHtml(at.nextReview)}</span>` : ""}
@@ -1086,6 +1104,7 @@
       state.learned[current.id] = true;
     } else {
       at.wrong += 1;
+      if (!at.firstWrong) at.firstWrong = todayKey();
     }
     at.last = todayKey();
     updateMemorySchedule(current.id, ok);
