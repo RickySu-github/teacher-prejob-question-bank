@@ -58,7 +58,8 @@
       opacity: .5;
       cursor: not-allowed;
     }
-    select {
+    select,
+    input[type="text"] {
       width: 100%;
       min-height: 42px;
       border: 1px solid var(--line);
@@ -142,6 +143,9 @@
       gap: 4px;
       color: var(--muted);
       font-size: 12px;
+    }
+    .search-control {
+      grid-column: 1 / -1;
     }
     .control-actions {
       grid-column: 1 / -1;
@@ -423,6 +427,9 @@
             <option value="hide">隐藏已学会</option>
             <option value="show">显示全部</option>
           </select>
+        </label>
+        <label class="search-control">题目搜索（OR 模糊匹配题号、题干、选项）
+          <input id="questionSearchInput" type="text" placeholder="例：05-02-125 教师反思 观察分析">
         </label>
         <div class="control-actions">
           <button id="startBtn" class="primary primary-action">开始训练</button>
@@ -878,6 +885,29 @@
     return QUESTIONS.find((q) => q.id === id);
   }
 
+  function searchTerms() {
+    const raw = $("questionSearchInput")?.value || "";
+    return raw
+      .toLowerCase()
+      .split(/[\s,，、;；|]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+
+  function questionSearchText(q) {
+    const optionText = (q.options || [])
+      .map((opt) => `${opt.key || ""} ${opt.text || ""}`)
+      .join(" ");
+    const text = `${q.id || ""} ${(q.id || "").replace(/-/g, "")} ${q.stem || ""} ${optionText}`;
+    return text.toLowerCase();
+  }
+
+  function matchesQuestionSearch(q, terms = searchTerms()) {
+    if (!terms.length) return true;
+    const text = questionSearchText(q);
+    return terms.some((term) => text.includes(term) || text.includes(term.replace(/-/g, "")));
+  }
+
   function resetToday(force = false) {
     const date = todayKey();
     if (!force && state.today && state.today.date === date && Array.isArray(state.today.ids) && state.today.ids.length) return;
@@ -921,16 +951,19 @@
     const subject = $("subjectSelect").value;
     const type = $("typeSelect").value;
     const learnedMode = $("learnedFilter").value;
+    const terms = searchTerms();
     resetToday(false);
-    let list = QUESTIONS;
-    if (mode === "daily") list = state.today.ids.map(questionById).filter(Boolean);
-    if (mode === "memory") list = QUESTIONS.filter((q) => isReviewDue(q.id));
-    if (mode === "wrong") list = QUESTIONS.filter((q) => isActiveWrongQuestion(q.id));
-    if (mode === "norule") list = QUESTIONS.filter((q) => q.rule === "none");
-    if (mode === "strict") list = QUESTIONS.filter((q) => q.rule === "strict" || q.rule === "exception");
-    if (mode === "subject" && subject !== "all") list = QUESTIONS.filter((q) => q.subject === subject);
-    if (mode === "unlearned") list = QUESTIONS.filter((q) => !completed(q.id));
-    if (mode !== "subject" && subject !== "all") list = list.filter((q) => q.subject === subject);
+    let list = terms.length ? QUESTIONS.filter((q) => matchesQuestionSearch(q, terms)) : QUESTIONS;
+    if (!terms.length) {
+      if (mode === "daily") list = state.today.ids.map(questionById).filter(Boolean);
+      if (mode === "memory") list = QUESTIONS.filter((q) => isReviewDue(q.id));
+      if (mode === "wrong") list = QUESTIONS.filter((q) => isActiveWrongQuestion(q.id));
+      if (mode === "norule") list = QUESTIONS.filter((q) => q.rule === "none");
+      if (mode === "strict") list = QUESTIONS.filter((q) => q.rule === "strict" || q.rule === "exception");
+      if (mode === "subject" && subject !== "all") list = QUESTIONS.filter((q) => q.subject === subject);
+      if (mode === "unlearned") list = QUESTIONS.filter((q) => !completed(q.id));
+    }
+    if (subject !== "all") list = list.filter((q) => q.subject === subject);
     if (type !== "all") list = list.filter((q) => q.type === type);
     if (learnedMode === "hide") {
       if (mode === "memory" || mode === "wrong") {
@@ -947,7 +980,10 @@
   }
 
   function keepInActiveQueue(id) {
-    if (!questionById(id)) return false;
+    const q = questionById(id);
+    if (!q) return false;
+    const terms = searchTerms();
+    if (terms.length && !matchesQuestionSearch(q, terms)) return false;
     const mode = $("modeSelect")?.value || "daily";
     const learnedMode = $("learnedFilter")?.value || "hide";
     if (mode === "wrong") return isActiveWrongQuestion(id);
@@ -1221,7 +1257,10 @@
       ? `当前队列 ${activeIndex + 1}/${activeIds.length}`
       : `共 ${total} 题，已学会 ${((learnedCount / total) * 100).toFixed(1)}%`;
     const mode = $("modeSelect")?.value || "daily";
-    if (mode === "memory") {
+    const terms = searchTerms();
+    if (terms.length) {
+      $("targetText").textContent = `OR 搜索 ${filteredIds().length} 题：${terms.join(" / ")}`;
+    } else if (mode === "memory") {
       $("targetText").textContent = `记忆复习只出今日到期/逾期题：${dueReviewCount} 题；${reviewStrategyLabel()}`;
     } else if (mode === "wrong") {
       $("targetText").textContent = `错题刷题 ${activeWrongCount} 题；最近一次已答对的题不列入错题库`;
@@ -1290,6 +1329,10 @@
     };
     ["modeSelect", "subjectSelect", "typeSelect", "learnedFilter"].forEach((id) => {
       $(id).onchange = prepareTraining;
+    });
+    $("questionSearchInput").addEventListener("input", prepareTraining);
+    $("questionSearchInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") startTraining();
     });
     migrateStateForCurrentBank({ makeBackup: true });
     resetToday(false);
