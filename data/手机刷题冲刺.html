@@ -33,7 +33,7 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       line-height: 1.5;
     }
-    button, select, input {
+    button, select, input, textarea {
       font: inherit;
     }
     button {
@@ -291,6 +291,29 @@
       font-size: 14px;
       overflow-wrap: anywhere;
     }
+    .ai-answer-editor {
+      display: block;
+      width: 100%;
+      min-height: 180px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: #344054;
+      padding: 10px;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .ai-answer-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .save-note {
+      min-height: 20px;
+      color: var(--green);
+      font-size: 13px;
+    }
     .bottom-actions {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -407,6 +430,7 @@
           <button id="startBtn" class="primary">开始训练</button>
           <button id="resetDailyBtn" class="ghost">重置今日</button>
           <button id="exportBtn" class="ghost">导出进度</button>
+          <button id="exportBankBtn" class="ghost">导出题库</button>
           <button id="repairStateBtn" class="ghost wide-action">更新题库记录</button>
         </div>
       </div>
@@ -437,6 +461,7 @@
   const EXAM_DATE = "2026-08-23";
   const STORE_KEY = "gqp-mobile-cram-v1";
   const BACKUP_STORE_KEY = "gqp-mobile-cram-backup-before-bank-update-v1";
+  const BANK_OVERRIDE_STORE_KEY = "gqp-mobile-cram-bank-overrides-v1";
   const QUESTION_ID_MIGRATIONS = {
     "06-02-158": "06-02-069"
   };
@@ -462,6 +487,64 @@
 
   function saveState() {
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  }
+
+  function loadBankOverrides() {
+    try {
+      const raw = localStorage.getItem(BANK_OVERRIDE_STORE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function saveBankOverrides(overrides) {
+    localStorage.setItem(BANK_OVERRIDE_STORE_KEY, JSON.stringify(overrides));
+  }
+
+  function applyBankOverrides() {
+    const overrides = loadBankOverrides();
+    const byId = new Map(QUESTIONS.map((q) => [q.id, q]));
+    for (const [id, fields] of Object.entries(overrides)) {
+      const q = byId.get(id);
+      if (!q || !fields || typeof fields !== "object") continue;
+      if (typeof fields.explain === "string") q.explain = fields.explain;
+      if (typeof fields.ai_explain === "string") q.ai_explain = fields.ai_explain;
+      if (typeof fields.updated_at === "string") q.updated_at = fields.updated_at;
+    }
+  }
+
+  function updateQuestionAiAnswer(id, text) {
+    const q = questionById(id);
+    if (!q) return false;
+    const value = String(text || "").trim();
+    const updatedAt = new Date().toISOString();
+    q.explain = value;
+    q.ai_explain = value;
+    q.updated_at = updatedAt;
+    const overrides = loadBankOverrides();
+    overrides[id] = {
+      ...(overrides[id] || {}),
+      explain: value,
+      ai_explain: value,
+      updated_at: updatedAt
+    };
+    saveBankOverrides(overrides);
+    return true;
+  }
+
+  function downloadJson(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   function validQuestionIds() {
@@ -1036,6 +1119,10 @@
     ].filter(Boolean).join("\n");
   }
 
+  function aiAnswerText(q) {
+    return q.ai_explain || q.explain || aiExplain(q);
+  }
+
   function showAiAnswer() {
     if (!current) return;
     const correct = new Set(correctKeys(current));
@@ -1047,8 +1134,22 @@
     result.className = "result show";
     result.innerHTML = `
       <div class="result-title">AI答疑：${escapeHtml(current.answer)}</div>
-      <div class="explain">${formatExplain(aiExplain(current))}</div>
+      <textarea id="aiAnswerEditor" class="ai-answer-editor">${escapeHtml(aiAnswerText(current))}</textarea>
+      <div class="ai-answer-actions">
+        <button id="saveAiAnswerBtn" class="primary">保存到题库</button>
+        <button id="resetAiAnswerBtn">重生成答疑</button>
+      </div>
+      <div id="aiSaveNote" class="save-note"></div>
     `;
+    $("saveAiAnswerBtn").onclick = () => {
+      if (!current) return;
+      const ok = updateQuestionAiAnswer(current.id, $("aiAnswerEditor").value);
+      $("aiSaveNote").textContent = ok ? "已更新当前题库数据，可用“导出题库”保存完整 JSON。" : "保存失败：当前题目不存在。";
+    };
+    $("resetAiAnswerBtn").onclick = () => {
+      $("aiAnswerEditor").value = aiExplain(current);
+      $("aiSaveNote").textContent = "已重生成，点击“保存到题库”后才会写入。";
+    };
     updateStats();
   }
 
@@ -1158,6 +1259,7 @@
   }
 
   function initControls() {
+    applyBankOverrides();
     $("subjectSelect").innerHTML = '<option value="all">全部科目</option>' + SUBJECTS
       .map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`)
       .join("");
@@ -1172,6 +1274,9 @@
         () => alert("进度 JSON 已复制到剪贴板。"),
         () => alert(text)
       );
+    };
+    $("exportBankBtn").onclick = () => {
+      downloadJson(`岗前题库数据-${todayKey()}.json`, QUESTIONS);
     };
     $("repairStateBtn").onclick = () => {
       const summary = migrateStateForCurrentBank({ makeBackup: true });
