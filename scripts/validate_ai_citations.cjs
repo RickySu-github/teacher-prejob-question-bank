@@ -17,7 +17,16 @@ const urlPattern = /https?:\/\/[^\s；。)）]+/;
 const localSourceHits = [];
 const badClaims = [];
 const badSourceObjects = [];
+const unverifiedTtcdwSources = [];
+const nonExtractedSources = [];
 let externallyCited = 0;
+
+function isExtractedSource(source) {
+  const article = String(source && source.article || "");
+  const sourceType = String(source && (source.sourceType || source.kind) || "");
+  return /PPT\/OCR|PPT OCR|音频转写|audio_transcript|ppt_ocr/i.test(article)
+    || /ppt_ocr|audio_transcript/i.test(sourceType);
+}
 
 for (const q of questions) {
   const aiExplain = String(q.ai_explain || "");
@@ -37,6 +46,17 @@ for (const q of questions) {
     const validSources = q.ai_sources.filter((source) => source && /^https?:\/\//.test(source.url || "") && source.title && source.quote);
     if (validSources.length !== q.ai_sources.length) badSourceObjects.push(q.id);
     if (validSources.length) externallyCited += 1;
+    if (q.ai_sources.some((source) => !isExtractedSource(source))) nonExtractedSources.push(q.id);
+
+    const hasUnverifiedTtcdw = q.ai_sources.some((source) => {
+      if (!source || !/^https:\/\/www\.ttcdw\.cn\/p\/course\/v\/v_/.test(source.url || "")) return false;
+      const article = String(source.article || "");
+      const sourceType = String(source.sourceType || source.kind || "");
+      return !(/PPT\/OCR|PPT OCR|音频转写|audio_transcript|ppt_ocr/i.test(article) || /ppt_ocr|audio_transcript/i.test(sourceType));
+    });
+    if (hasUnverifiedTtcdw || /TTCDW课程资源佐证（.*课程简介\/课程目录/.test(aiExplain)) {
+      unverifiedTtcdwSources.push(q.id);
+    }
   }
 }
 
@@ -45,14 +65,18 @@ console.log({
   externallyCited,
   localSourceHits: localSourceHits.length,
   badClaims: badClaims.length,
-  badSourceObjects: badSourceObjects.length
+  badSourceObjects: badSourceObjects.length,
+  unverifiedTtcdwSources: unverifiedTtcdwSources.length,
+  nonExtractedSources: nonExtractedSources.length
 });
 
-if (localSourceHits.length || badClaims.length || badSourceObjects.length) {
+if (localSourceHits.length || badClaims.length || badSourceObjects.length || unverifiedTtcdwSources.length || nonExtractedSources.length) {
   console.log({
     localSourceHits: localSourceHits.slice(0, 10),
     badClaims: badClaims.slice(0, 10),
-    badSourceObjects: badSourceObjects.slice(0, 10)
+    badSourceObjects: badSourceObjects.slice(0, 10),
+    unverifiedTtcdwSources: unverifiedTtcdwSources.slice(0, 10),
+    nonExtractedSources: nonExtractedSources.slice(0, 10)
   });
   throw new Error("AI citation validation failed");
 }
