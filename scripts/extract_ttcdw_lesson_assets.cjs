@@ -21,6 +21,7 @@ function parseArgs(argv) {
     ocr: true,
     ocrBrowserFallback: false,
     headful: false,
+    clean: false,
     browserChannel: "chrome",
   };
 
@@ -38,6 +39,10 @@ function parseArgs(argv) {
     }
     if (key === "headful") {
       args.headful = true;
+      continue;
+    }
+    if (key === "clean") {
+      args.clean = true;
       continue;
     }
     const value = argv[i + 1];
@@ -318,19 +323,21 @@ async function main() {
   const lessonDir = path.resolve(args.out, course.id, lesson.id);
   const browserFramesDir = path.join(lessonDir, "browser_frames");
   const decodedFramesDir = path.join(lessonDir, "frames");
-  for (const generatedPath of [
-    browserFramesDir,
-    decodedFramesDir,
-    path.join(lessonDir, "metadata.json"),
-    path.join(lessonDir, "ppt_ocr.md"),
-    path.join(lessonDir, "audio_sample_60s.wav"),
-    path.join(lessonDir, "audio_full.wav"),
-    path.join(lessonDir, "audio_transcript_sample.txt"),
-    path.join(lessonDir, "audio_transcript_sample.json"),
-    path.join(lessonDir, "audio_transcript_full.txt"),
-    path.join(lessonDir, "audio_transcript_full.json"),
-  ]) {
-    fs.rmSync(generatedPath, { recursive: true, force: true });
+  if (args.clean) {
+    for (const generatedPath of [
+      browserFramesDir,
+      decodedFramesDir,
+      path.join(lessonDir, "metadata.json"),
+      path.join(lessonDir, "ppt_ocr.md"),
+      path.join(lessonDir, `audio_sample_${args.audioSeconds}s.wav`),
+      path.join(lessonDir, "audio_full.wav"),
+      path.join(lessonDir, "audio_transcript_sample.txt"),
+      path.join(lessonDir, "audio_transcript_sample.json"),
+      path.join(lessonDir, "audio_transcript_full.txt"),
+      path.join(lessonDir, "audio_transcript_full.json"),
+    ]) {
+      fs.rmSync(generatedPath, { recursive: true, force: true });
+    }
   }
   ensureDir(browserFramesDir);
 
